@@ -1,9 +1,14 @@
 #!/usr/bin/env python
 
 """
-ps over time.
+PS OVER TIME
+============
+
+
+
 """
 
+from time import sleep
 import subprocess
 import datetime
 import logging
@@ -13,20 +18,56 @@ import pprint
 import sys
 import os
 
+
 log = logging.getLogger()
 
 def main():
     options, args = parse_options()
     init_logging(options.verbose)
     
-    
+    if options.measure:
+        take_measurement(ignore=options.ignore)
+    elif options.daemon:
+        loop_forever(int(options.daemon), int(options.ignore))
+    elif args:
+        print_for_process(args[0])
+    else:
+        print_process_list()
 
+def print_process_list():
+    connection = get_database()
+    cursor = connection.cursor()
+    cursor.execute("SELECT * FROM process")
+    for row in cursor.fetchall():
+        print row['id'], row['pid'], row['lstart'], repr(row['cmd'])
+    connection.close()
+
+def print_for_process(process_id):
+    connection = get_database()
+    cursor = connection.cursor()
+    cursor.execute("SELECT * FROM measurement WHERE process_id = ? ORDER BY timestamp", (process_id,))
+    all = cursor.fetchall()
+    keys = all[0].keys()
+    print " ".join(keys)
+    for row in all:
+        print " ".join([str(row[i]) for i in keys])
+    connection.close()
+
+def loop_forever(waiting_time, ignore):
+    while True:
+        take_measurement(ignore)
+        sleep(waiting_time * 60)
+
+def take_measurement(ignore):
     connection = get_database()
     cur = connection.cursor()
     now = datetime.datetime.now()
     for row in parse_ps():
-        insert_measurement(cur, row, now)
+        if row['etime'] > int(ignore):
+            insert_measurement(cur, row, now)
     connection.commit()
+    connection.close()
+
     
 def insert_measurement(cursor, row, now):
     cursor.execute("""INSERT OR IGNORE INTO 
@@ -115,7 +156,7 @@ def parse_ps():
         ## Do conversions on data in the fields
         row["etime"] = convert_ps_time(row["etime"])
         row["cputime"] = convert_ps_time(row["cputime"])
-        row["cmd"] = row["cmd"][0]
+        row["cmd"] = row["cmd"][0].strip()
         row["lstart"] = datetime.datetime.strptime(" ".join(row["lstart"]), 
                                                    "%a %b %d %H:%M:%S %Y")
         ##
@@ -164,6 +205,14 @@ def init_logging(verbose=False):
 def parse_options():
     parser = optparse.OptionParser(usage=__doc__)
     parser.add_option("-v", "--verbose", default=False)
+    parser.add_option("-m", "--measure", default=False, action="store_true",
+                      help="Take a measurement then exit")
+    parser.add_option("-d", "--daemon", default=0,
+                      help="Run indefinitely, taking a measurement every X minutes", 
+                      metavar="MINUTES")
+    parser.add_option("-i", "--ignore", default=60,
+                      help="Ignore processes younger than SECONDS. Default %(default)s", 
+                      metavar="SECONDS")
     parsed_options, parsed_args = parser.parse_args()
     return parsed_options, parsed_args
 
